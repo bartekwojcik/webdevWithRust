@@ -105,6 +105,7 @@ async fn login_handler(login: LoginRequest) -> Result<impl Reply, Rejection> {
     Ok(warp::reply::json(&LoginResponse { token }))
 }
 
+//todo dont know whats here
 // async fn login_handler(body: Value) -> Result<impl Reply, Rejection> {
 //     // Print the raw incoming body for debugging
 //     println!("Received body: {}", body);
