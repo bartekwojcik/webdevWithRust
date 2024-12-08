@@ -1,5 +1,6 @@
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use warp::filters::query;
@@ -104,6 +105,52 @@ async fn login_handler(login: LoginRequest) -> Result<impl Reply, Rejection> {
     Ok(warp::reply::json(&LoginResponse { token }))
 }
 
+// async fn login_handler(body: Value) -> Result<impl Reply, Rejection> {
+//     // Print the raw incoming body for debugging
+//     println!("Received body: {}", body);
+
+//     // Manually extract username and password
+//     let username = body["username"].as_str().ok_or_else(|| {
+//         println!("Failed to extract username");
+//         warp::reject::custom(InvalidCredentials)
+//     })?;
+
+//     let password = body["password"].as_str().ok_or_else(|| {
+//         println!("Failed to extract password");
+//         warp::reject::custom(InvalidCredentials)
+//     })?;
+
+//     // Create LoginRequest manually
+//     let login = LoginRequest {
+//         username: username.to_string(),
+//         password: password.to_string(),
+//     };
+
+//     // Rest of your existing authentication logic
+//     if login.password != "password123" {
+//         return Err(warp::reject::custom(InvalidCredentials));
+//     }
+
+//     // Create the JWT claims
+//     let claims = Claims {
+//         sub: login.username,
+//         exp: (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize,
+//     };
+
+//     // Create the token
+//     let token = encode(
+//         &Header::default(),
+//         &claims,
+//         &EncodingKey::from_secret("your-secret-key".as_ref()),
+//     )
+//     .map_err(|e| {
+//         println!("Token encoding error: {:?}", e);
+//         warp::reject::custom(InvalidCredentials)
+//     })?;
+
+//     Ok(warp::reply::json(&LoginResponse { token }))
+// }
+
 async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(error) = r.find::<CorsForbidden>() {
         Ok(warp::reply::with_status(
@@ -121,6 +168,7 @@ async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
             StatusCode::UNAUTHORIZED,
         ))
     } else {
+        eprintln!("unhandled rejection: {:?}", r);
         Ok(warp::reply::with_status(
             "route not found".to_string(),
             StatusCode::NOT_FOUND,
@@ -132,7 +180,7 @@ async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
 async fn main() {
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_header("content-type")
+        .allow_headers(vec!["Content-Type", "Accept"])
         .allow_methods(&[Method::PUT, Method::DELETE, Method::GET, Method::POST]);
 
     let get_items = warp::get()
@@ -147,6 +195,7 @@ async fn main() {
         .and_then(login_handler);
 
     let routes = get_items.or(login).with(cors).recover(return_error);
+    // let routes = get_items.or(login).recover(return_error);
 
     println!("Server started at http://127.0.0.1:3030");
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
