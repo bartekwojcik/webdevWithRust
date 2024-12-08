@@ -1,0 +1,4 @@
+curl.exe -X POST `                                                                                          13:54:13   10.06s
+>          -H "Content-Type: application/json" `
+>          -H "Accept: application/json" `
+>          -d '{\"username\": \"testuser\", \"password\": \"password123\"}' `
