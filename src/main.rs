@@ -1,203 +1,228 @@
-use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::io::{Error, ErrorKind};
-use std::str::FromStr;
-use warp::filters::query;
+use std::{collections::HashMap, hash::Hash, sync::Arc};
+use tokio::sync::RwLock;
 use warp::{
-    filters::cors::CorsForbidden, http::Method, http::StatusCode, reject::Reject, Filter,
-    Rejection, Reply,
+    filters::{body::BodyDeserializeError, cors::CorsForbidden, query},
+    http::{Method, StatusCode},
+    reject::Reject,
+    Filter, Rejection, Reply,
 };
 
-#[derive(Debug, Serialize)]
-pub struct Question {
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct Question {
     id: QuestionId,
     title: String,
     content: String,
     tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
 struct QuestionId(String);
 
-#[derive(Debug, Deserialize)]
-struct LoginRequest {
-    username: String,
-    password: String,
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Hash)]
+struct AnswerId(String);
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Answer {
+    id: AnswerId,
+    content: String,
+    question_id: QuestionId,
 }
 
-#[derive(Debug, Serialize)]
-struct LoginResponse {
-    token: String,
+#[derive(Debug)]
+struct Pagination {
+    start: usize,
+    end: usize,
 }
 
-#[derive(Debug, Serialize)]
-struct Claims {
-    sub: String,
-    exp: usize,
+#[derive(Clone)]
+struct Store {
+    questions: Arc<RwLock<HashMap<QuestionId, Question>>>,
+    answers: Arc<RwLock<HashMap<AnswerId, Answer>>>,
 }
 
-impl Question {
-    fn new(id: QuestionId, title: String, content: String, tags: Option<Vec<String>>) -> Self {
-        Question {
-            id,
-            title,
-            content,
-            tags,
+impl Store {
+    fn new() -> Self {
+        Store {
+            questions: Arc::new(RwLock::new(Self::init())),
+            answers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-}
 
-impl FromStr for QuestionId {
-    type Err = std::io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.is_empty() {
-            false => Ok(QuestionId(s.to_string())),
-            true => Err(Error::new(ErrorKind::InvalidInput, "no id provided")),
-        }
+    fn init() -> HashMap<QuestionId, Question> {
+        let file = include_str!("../questions.json");
+        serde_json::from_str(file).expect("can't read questions.json")
     }
 }
 
 #[derive(Debug)]
-struct InvalidId;
-impl Reject for InvalidId {}
+enum Error {
+    ParseError(std::num::ParseIntError),
+    MissingParameters,
+    QuestionNotFound,
+}
 
-#[derive(Debug)]
-struct InvalidCredentials;
-impl Reject for InvalidCredentials {}
-
-async fn get_questions() -> Result<impl Reply, Rejection> {
-    let question = Question::new(
-        QuestionId::from_str("1").expect("no id provided"),
-        "First question".to_string(),
-        "conttent".to_string(),
-        Some(vec!["faq".to_string()]),
-    );
-
-    match question.id.0.parse::<i32>() {
-        Err(_) => Err(warp::reject::custom(InvalidId)),
-        Ok(_) => Ok(warp::reply::json(&question)),
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Error::ParseError(ref err) => write!(f, "Cannot parse parameter: {}", err),
+            Error::MissingParameters => write!(f, "Missing parameter"),
+            Error::QuestionNotFound => write!(f, "Question not found"),
+        }
     }
 }
 
-async fn login_handler(login: LoginRequest) -> Result<impl Reply, Rejection> {
-    // In a real application, you would verify credentials against a database
-    // For this example, we'll accept any username with password "password123"
-    if login.password != "password123" {
-        return Err(warp::reject::custom(InvalidCredentials));
-    }
-
-    // Create the JWT claims
-    let claims = Claims {
-        sub: login.username,
-        exp: (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize,
-    };
-
-    // Create the token
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret("your-secret-key".as_ref()),
-    )
-    .map_err(|_| warp::reject::custom(InvalidCredentials))?;
-
-    Ok(warp::reply::json(&LoginResponse { token }))
-}
-
-//todo dont know whats here
-// async fn login_handler(body: Value) -> Result<impl Reply, Rejection> {
-//     // Print the raw incoming body for debugging
-//     println!("Received body: {}", body);
-
-//     // Manually extract username and password
-//     let username = body["username"].as_str().ok_or_else(|| {
-//         println!("Failed to extract username");
-//         warp::reject::custom(InvalidCredentials)
-//     })?;
-
-//     let password = body["password"].as_str().ok_or_else(|| {
-//         println!("Failed to extract password");
-//         warp::reject::custom(InvalidCredentials)
-//     })?;
-
-//     // Create LoginRequest manually
-//     let login = LoginRequest {
-//         username: username.to_string(),
-//         password: password.to_string(),
-//     };
-
-//     // Rest of your existing authentication logic
-//     if login.password != "password123" {
-//         return Err(warp::reject::custom(InvalidCredentials));
-//     }
-
-//     // Create the JWT claims
-//     let claims = Claims {
-//         sub: login.username,
-//         exp: (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize,
-//     };
-
-//     // Create the token
-//     let token = encode(
-//         &Header::default(),
-//         &claims,
-//         &EncodingKey::from_secret("your-secret-key".as_ref()),
-//     )
-//     .map_err(|e| {
-//         println!("Token encoding error: {:?}", e);
-//         warp::reject::custom(InvalidCredentials)
-//     })?;
-
-//     Ok(warp::reply::json(&LoginResponse { token }))
-// }
+impl Reject for Error {}
 
 async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
-    if let Some(error) = r.find::<CorsForbidden>() {
+    if let Some(error) = r.find::<Error>() {
+        Ok(warp::reply::with_status(
+            error.to_string(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+        ))
+    } else if let Some(error) = r.find::<CorsForbidden>() {
         Ok(warp::reply::with_status(
             error.to_string(),
             StatusCode::FORBIDDEN,
         ))
-    } else if let Some(InvalidId) = r.find() {
+    } else if let Some(error) = r.find::<BodyDeserializeError>() {
         Ok(warp::reply::with_status(
-            "no valid id".to_string(),
+            error.to_string(),
             StatusCode::UNPROCESSABLE_ENTITY,
         ))
-    } else if let Some(InvalidCredentials) = r.find() {
-        Ok(warp::reply::with_status(
-            "invalid credentials".to_string(),
-            StatusCode::UNAUTHORIZED,
-        ))
     } else {
-        eprintln!("unhandled rejection: {:?}", r);
         Ok(warp::reply::with_status(
-            "route not found".to_string(),
+            "Route not found".to_string(),
             StatusCode::NOT_FOUND,
         ))
     }
 }
 
+fn extract_pagination(params: HashMap<String, String>) -> Result<Pagination, Error> {
+    if params.contains_key("start") && params.contains_key("end") {
+        return Ok(Pagination {
+            start: params
+                .get("start")
+                .unwrap()
+                .parse::<usize>()
+                .map_err(Error::ParseError)?,
+            end: params
+                .get("end")
+                .unwrap()
+                .parse::<usize>()
+                .map_err(Error::ParseError)?,
+        });
+    }
+    Err(Error::MissingParameters)
+}
+
+async fn get_question(
+    params: HashMap<String, String>,
+    store: Store,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    if !params.is_empty() {
+        let pagination = extract_pagination(params)?;
+        let questions: Vec<Question> = store.questions.read().await.values().cloned().collect();
+        let res = &questions[pagination.start..pagination.end];
+        Ok(warp::reply::json(&res))
+    } else {
+        let res: Vec<Question> = store.questions.read().await.values().cloned().collect();
+        Ok(warp::reply::json(&res))
+    }
+}
+
+async fn update_question(
+    id: String,
+    store: Store,
+    question: Question,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    match store.questions.write().await.get_mut(&QuestionId(id)) {
+        Some(q) => *q = question,
+        None => return Err(warp::reject::custom(Error::QuestionNotFound)),
+    }
+
+    Ok(warp::reply::with_status("Question updated", StatusCode::OK))
+}
+
+async fn delete_question(id: String, store: Store) -> Result<impl warp::Reply, warp::Rejection> {
+    match store.questions.write().await.remove(&QuestionId(id)) {
+        Some(_) => return Ok(warp::reply::with_status("Question deleted", StatusCode::OK)),
+        None => return Err(warp::reject::custom(Error::QuestionNotFound)),
+    }
+}
+
+async fn add_answer(
+    store: Store,
+    params: HashMap<String, String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let answer = Answer {
+        id: AnswerId("1".to_string()),
+        content: params.get("content").unwrap().to_string(),
+        question_id: QuestionId(params.get("questionId").unwrap().to_string()),
+    };
+
+    store
+        .answers
+        .write()
+        .await
+        .insert(answer.id.clone(), answer);
+
+    Ok(warp::reply::with_status("Answer added", StatusCode::OK))
+}
+
 #[tokio::main]
 async fn main() {
+    let store = Store::new();
+    let store_filter = warp::any().map(move || store.clone());
+
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["Content-Type", "Accept"])
+        .allow_header("content-type")
         .allow_methods(&[Method::PUT, Method::DELETE, Method::GET, Method::POST]);
 
-    let get_items = warp::get()
+    let get_questions = warp::get()
         .and(warp::path("questions"))
         .and(warp::path::end())
+        .and(warp::query())
+        .and(store_filter.clone())
         .and_then(get_questions);
 
-    let login = warp::post()
-        .and(warp::path("login"))
+    let update_question = warp::put()
+        .and(warp::path("questions"))
+        .and(warp::path::param::<String>())
         .and(warp::path::end())
+        .and(store_filter.clone())
         .and(warp::body::json())
-        .and_then(login_handler);
+        .and_then(update_question);
 
-    let routes = get_items.or(login).with(cors).recover(return_error);
-    // let routes = get_items.or(login).recover(return_error);
+    let delete_question = warp::delete()
+        .and(warp::path("questions"))
+        .and(warp::path::param::<String>())
+        .and(warp::path::end())
+        .and(store_filter.clone())
+        .and_then(delete_question);
 
-    println!("Server started at http://127.0.0.1:3030");
+    let add_question = warp::post()
+        .and(warp::path("questions"))
+        .and(warp::path::end())
+        .and(store_filter.clone())
+        .and(warp::body::json())
+        .and_then(add_question);
+
+    let add_answer = warp::post()
+        .and(warp::path("comments"))
+        .and(warp::path::end())
+        .and(store_filter.clone())
+        .and(warp::body::form())
+        .and_then(add_answer);
+
+    let routes = get_questions
+        .or(update_question)
+        .or(add_question)
+        .or(add_answer)
+        .or(delete_question)
+        .with(cors)
+        .recover(return_error);
+
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
