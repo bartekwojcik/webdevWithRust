@@ -98,6 +98,19 @@ async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
     }
 }
 
+async fn add_question(
+    store: Store,
+    question: Question,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    store
+        .questions
+        .write()
+        .await
+        .insert(question.id.clone(), question);
+
+    Ok(warp::reply::with_status("Question added", StatusCode::OK))
+}
+
 fn extract_pagination(params: HashMap<String, String>) -> Result<Pagination, Error> {
     if params.contains_key("start") && params.contains_key("end") {
         return Ok(Pagination {
@@ -116,7 +129,7 @@ fn extract_pagination(params: HashMap<String, String>) -> Result<Pagination, Err
     Err(Error::MissingParameters)
 }
 
-async fn get_question(
+async fn get_questions(
     params: HashMap<String, String>,
     store: Store,
 ) -> Result<impl warp::Reply, warp::Rejection> {
