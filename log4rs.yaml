@@ -9,7 +9,6 @@ appenders:
     path: "stderr.log"
     encoder:
       kind: json
-
 root:
   level: info
   appenders:
